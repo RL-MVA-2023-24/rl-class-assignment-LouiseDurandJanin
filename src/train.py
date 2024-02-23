@@ -3,7 +3,6 @@ from env_hiv import HIVPatient
 import numpy as np
 from tqdm import tqdm
 import joblib
-import os
 from sklearn.ensemble import RandomForestRegressor
 
 env = TimeLimit(
