@@ -3,7 +3,11 @@ from env_hiv import HIVPatient
 import numpy as np
 from tqdm import tqdm
 import joblib
+import torch
+import random
+import torch.nn as nn
 from sklearn.ensemble import RandomForestRegressor
+from evaluate import evaluate_HIV, evaluate_HIV_population
 
 env = TimeLimit(
     env=HIVPatient(domain_randomization=False), max_episode_steps=200
@@ -14,89 +18,139 @@ env = TimeLimit(
 # You have to implement your own agent.
 # Don't modify the methods names and signatures, but you can add methods.
 # ENJOY!
+def greedy_action(network, state):
+    device = "cuda" if next(network.parameters()).is_cuda else "cpu"
+    with torch.no_grad():
+        Q = network(torch.Tensor(state).unsqueeze(0).to(device))
+        return torch.argmax(Q).item()
+class ReplayBuffer:
+    def __init__(self, capacity, device):
+        self.capacity = capacity # capacity of the buffer
+        self.data = []
+        self.index = 0 # index of the next cell to be filled
+        self.device = device
+    def append(self, s, a, r, s_, d):
+        if len(self.data) < self.capacity:
+            self.data.append(None)
+        self.data[self.index] = (s, a, r, s_, d)
+        self.index = (self.index + 1) % self.capacity
+    def sample(self, batch_size):
+        batch = random.sample(self.data, batch_size)
+        return list(map(lambda x:torch.Tensor(np.array(x)).to(self.device), list(zip(*batch))))
+    def __len__(self):
+        return len(self.data)
+    
 class ProjectAgent:
     def __init__(self):
-        super(ProjectAgent, self).__init__()
-        self.env = env 
-        self.S, self.A, self.R, self.S2, self.D = self.collect_samples()
-        print(self.S.shape[0])
-        self.Qfunction = self.rf_fqi()
-        self.path = None
-
-    def collect_samples(self, horizon = int(200), disable_tqdm=False, print_done_states=False):
-        env = self.env
-        s, _ = env.reset()
-        #dataset = []
-        S = []
-        A = []
-        R = []
-        S2 = []
-        D = []
-        for _ in tqdm(range(horizon), disable=disable_tqdm):
-            a = env.action_space.sample()
-            s2, r, done, trunc, _ = env.step(a)
-            #dataset.append((s,a,r,s2,done,trunc))
-            S.append(s)
-            A.append(a)
-            R.append(r)
-            S2.append(s2)
-            D.append(done)
-            if done or trunc:
-                s, _ = env.reset()
-                if done and print_done_states:
-                    print("done!")
-            else:
-                s = s2
-        S = np.array(S)
-        A = np.array(A).reshape((-1,1))
-        R = np.array(R)
-        S2= np.array(S2)
-        D = np.array(D)
-        return S, A, R, S2, D
+        self.device = "cpu"
+        self.env = env
+        self.gamma = 0.95
+        self.batch_size = 20
+        self.nb_actions = 4
+        self.memory = ReplayBuffer(1000000, self.device)
+        self.epsilon_max = 1.
+        self.epsilon_min = 0.01
+        self.epsilon_stop = 1000
+        self.epsilon_delay = 20
+        self.epsilon_step = (self.epsilon_max-self.epsilon_min)/self.epsilon_stop
+        self.state_dim = self.env.observation_space.shape[0]
+        self.nb_neurons=24
+        self.model = torch.nn.Sequential(nn.Linear(self.state_dim, self.nb_neurons),
+                          nn.ReLU(),
+                          nn.Linear(self.nb_neurons, self.nb_neurons),
+                          nn.ReLU(), 
+                          nn.Linear(self.nb_neurons, self.nb_actions)).to(self.device)
+        self.criterion = torch.nn.MSELoss()
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
+        self.path = "model.pth"
     
-    def rf_fqi(self, iterations=10, nb_actions=4, gamma=.9, disable_tqdm=False):
-        nb_samples = self.S.shape[0]
-        Qfunctions = []
-        SA = np.append(self.S,self.A,axis=1)
-        for iter in tqdm(range(iterations), disable=disable_tqdm):
-            if iter==0:
-                value=self.R.copy()
+    def gradient_step(self):
+        if len(self.memory) > self.batch_size:
+            X, A, R, Y, D = self.memory.sample(self.batch_size)
+            QYmax = self.model(Y).max(1)[0].detach()
+            #update = torch.addcmul(R, self.gamma, 1-D, QYmax)
+            update = torch.addcmul(R, 1-D, QYmax, value=self.gamma)
+            QXA = self.model(X).gather(1, A.to(torch.long).unsqueeze(1))
+            loss = self.criterion(QXA, update.unsqueeze(1))
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step() 
+    def train(self, env, max_episode):
+        episode_return = []
+        episode = 0
+        episode_cum_reward = 0
+        state, _ = env.reset()
+        epsilon = self.epsilon_max
+        step = 0
+        best = 0
+        while episode < max_episode:
+            # update epsilon
+            if step > self.epsilon_delay:
+                epsilon = max(self.epsilon_min, epsilon-self.epsilon_step)
+
+            # select epsilon-greedy action
+            if np.random.rand() < epsilon:
+                action = env.action_space.sample()
             else:
-                Q2 = np.zeros((nb_samples,nb_actions))
-                for a2 in range(nb_actions):
-                    A2 = a2*np.ones((self.S.shape[0],1))
-                    S2A2 = np.append(self.S2,A2,axis=1)
-                    Q2[:,a2] = Qfunctions[-1].predict(S2A2)
-                max_Q2 = np.max(Q2,axis=1)
-                value = self.R + gamma*(1-self.D)*max_Q2
-            Q = RandomForestRegressor()
-            Q.fit(SA,value)
-            Qfunctions.append(Q)
-        return Qfunctions[-1]
-    def greedy_action(self,s,nb_actions=int(4)):
-        Qsa = []
-        for a in range(nb_actions):
-            sa = np.append(s,a).reshape(1, -1)
-            Qsa.append(self.Qfunction.predict(sa))
-        return np.argmax(Qsa)
-     
+                action = greedy_action(self.model, state)
+
+            # step
+            next_state, reward, done, trunc, _ = env.step(action)
+            self.memory.append(state, action, reward, next_state, done)
+            episode_cum_reward += reward
+
+            # train
+            self.gradient_step()
+
+            # next transition
+            step += 1
+            if done or trunc:
+                episode += 1
+                current_score_agent = evaluate_HIV(self)
+                score_pop = evaluate_HIV_population(self)
+                if current_score_agent > best:
+                    print("Episode ", '{:3d}'.format(episode), 
+                      ", epsilon ", '{:6.2f}'.format(epsilon), 
+                      ", batch size ", '{:5d}'.format(len(self.memory)), 
+                      ", episode return ", '{:4.1f}'.format(episode_cum_reward),
+                      sep='')
+                    self.save("model.pth")
+                    state, _ = env.reset()
+                    episode_return.append(episode_cum_reward)
+                    episode_cum_reward = 0
+
+            else:
+                state = next_state
+
+        return episode_return
+
+    
     def act(self, observation, use_random=False):
-        Qfunction = self.Qfunction
+ 
         if use_random:
-            a = self.env.action_space.sample()
+            action = self.env.action_space.sample()
+        else:
+            action = greedy_action(self.model, observation)
 
-        a = self.greedy_action(observation)
-
-        return a
+        return action
 
     def save(self, path):
-        joblib.dump(self.Qfunction, path)
+        torch.save(self.model.state_dict(), path)
         self.path = path
 
     def load(self):
         if self.path:
-            loaded_state = joblib.load(self.path)
-            self.Qfunction = loaded_state
+            self.model.load_state_dict(torch.load(self.path))
         else:
             print(f"File not found at path: {self.path}. Skipping loading.")
 
+'''
+agent = ProjectAgent()
+
+# Train the agent
+max_episode = 10  # You can adjust this value
+episode_returns = agent.train(env,max_episode)
+
+# Save the trained model
+agent.save("model_final.pth")
+'''
