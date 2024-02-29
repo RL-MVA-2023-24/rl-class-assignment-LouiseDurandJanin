@@ -7,6 +7,7 @@ import torch
 import random
 import torch.nn as nn
 from sklearn.ensemble import RandomForestRegressor
+from copy import deepcopy
 from evaluate import evaluate_HIV, evaluate_HIV_population
 
 env = TimeLimit(
@@ -45,8 +46,10 @@ class ProjectAgent:
         self.device = "cpu"
         self.env = env
         self.gamma = 0.95
+        #self.batch_size = 100
         self.batch_size = 20
         self.nb_actions = 4
+        #self.memory = ReplayBuffer(100000, self.device)
         self.memory = ReplayBuffer(1000000, self.device)
         self.epsilon_max = 1.
         self.epsilon_min = 0.01
@@ -60,9 +63,15 @@ class ProjectAgent:
                           nn.Linear(self.nb_neurons, self.nb_neurons),
                           nn.ReLU(), 
                           nn.Linear(self.nb_neurons, self.nb_actions)).to(self.device)
+        #self.target_model = deepcopy(self.model).to(self.device)
         self.criterion = torch.nn.MSELoss()
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
-        self.path = "model.pth"
+        #self.nb_gradient_steps =  1
+        #self.update_target_strategy = 'replace'
+        #self.update_target_freq = 20
+        #self.update_target_tau = 0.005
+    
+        self.path = "model_final.pth"
     
     def gradient_step(self):
         if len(self.memory) > self.batch_size:
@@ -109,10 +118,13 @@ class ProjectAgent:
                 current_score_agent = evaluate_HIV(self)
                 score_pop = evaluate_HIV_population(self)
                 if current_score_agent > best:
+                    best = current_score_agent
                     print("Episode ", '{:3d}'.format(episode), 
                       ", epsilon ", '{:6.2f}'.format(epsilon), 
                       ", batch size ", '{:5d}'.format(len(self.memory)), 
                       ", episode return ", '{:4.1f}'.format(episode_cum_reward),
+                       ", score agent ", '{:4.1f}'.format(current_score_agent),
+                        ", score population ", '{:4.1f}'.format(score_pop),
                       sep='')
                     self.save("model.pth")
                     state, _ = env.reset()
@@ -146,7 +158,7 @@ class ProjectAgent:
 
 '''
 agent = ProjectAgent()
-
+agent.load()
 # Train the agent
 max_episode = 10  # You can adjust this value
 episode_returns = agent.train(env,max_episode)
