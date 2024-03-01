@@ -19,11 +19,7 @@ env = TimeLimit(
 # You have to implement your own agent.
 # Don't modify the methods names and signatures, but you can add methods.
 # ENJOY!
-def greedy_action(network, state):
-    device = "cuda" if next(network.parameters()).is_cuda else "cpu"
-    with torch.no_grad():
-        Q = network(torch.Tensor(state).unsqueeze(0).to(device))
-        return torch.argmax(Q).item()
+
 class ReplayBuffer:
     def __init__(self, capacity, device):
         self.capacity = capacity # capacity of the buffer
@@ -46,16 +42,16 @@ class ProjectAgent:
         self.device = "cpu"
         self.env = env
         self.gamma = 0.95
-        self.batch_size = 100
+        self.batch_size = 256
         self.nb_actions = 4
         self.memory = ReplayBuffer(100000, self.device)
         self.epsilon_max = 1.
         self.epsilon_min = 0.01
         self.epsilon_stop = 1000
         self.epsilon_delay = 20
-        self.epsilon_step = (self.epsilon_max-self.epsilon_min)/self.epsilon_stop
+        self.epsilon_step = 0.005
         self.state_dim = self.env.observation_space.shape[0]
-        self.nb_neurons=24
+        self.nb_neurons=256
         self.model = torch.nn.Sequential(nn.Linear(self.state_dim, self.nb_neurons),
                           nn.ReLU(),
                           nn.Linear(self.nb_neurons, self.nb_neurons),
@@ -81,7 +77,12 @@ class ProjectAgent:
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step() 
-    def train(self, env, max_episode):
+    def greedy_action(self,network, state):
+        with torch.no_grad():
+            Q = network(torch.Tensor(state).unsqueeze(0).to(self.device))
+            return torch.argmax(Q).item()
+        
+    def train(self, env, max_episode, np_samples):
         episode_return = []
         episode = 0
         episode_cum_reward = 0
@@ -89,19 +90,34 @@ class ProjectAgent:
         epsilon = self.epsilon_max
         step = 0
         best=0
+
+        # Fill replay memory with random steps
+        for _ in range(np_samples):
+            # select epsilon-greedy actio
+            action = self.env.action_space.sample()
+            next_state, reward, done, trunc, _ = self.env.step(action)
+            self.memory.append(state, action, reward, next_state, done)
+            if done:
+                state, _ = self.env.reset()
+            else:
+                state = next_state
+        print("Sampling done")
+        
         while episode < max_episode:
             # update epsilon
+            
             if step > self.epsilon_delay:
                 epsilon = max(self.epsilon_min, epsilon-self.epsilon_step)
             # select epsilon-greedy action
             if np.random.rand() < epsilon:
                 action = env.action_space.sample()
             else:
-                action = greedy_action(self.model, state)
+                action = self.greedy_action(self.model, state)
             # step
             next_state, reward, done, trunc, _ = env.step(action)
-            self.memory.append(state, action, reward, next_state, done)
+            #self.memory.append(state, action, reward, next_state, done)
             episode_cum_reward += reward
+            
             # train
             for _ in range(self.nb_gradient_steps): 
                 self.gradient_step()
@@ -125,9 +141,10 @@ class ProjectAgent:
                 if current_score_agent > best:
                     best = current_score_agent
                     print("best score agent improved")
+                    self.save("model.pth")
                 print("Episode ", '{:3d}'.format(episode), 
                       ", epsilon ", '{:6.2f}'.format(epsilon), 
-                      ", batch size ", '{:5d}'.format(len(self.memory)), 
+                      ", length replay memory ", '{:5d}'.format(len(self.memory)), 
                       ", episode return ", '{:4.1f}'.format(episode_cum_reward),
                      ", score agent ", '{:4.1f}'.format(current_score_agent),
                         ", score population ", '{:4.1f}'.format(score_pop),
@@ -145,7 +162,7 @@ class ProjectAgent:
         if use_random:
             action = self.env.action_space.sample()
         else:
-            action = greedy_action(self.model, observation)
+            action = self.greedy_action(self.model, observation)
 
         return action
 
@@ -159,13 +176,13 @@ class ProjectAgent:
         else:
             print(f"File not found at path: {self.path}. Skipping loading.")
 
-'''
-agent = ProjectAgent()
-agent.load()
-# Train the agent
-max_episode = 20  # You can adjust this value
-episode_returns = agent.train(env,max_episode)
+if __name__ =="__main__":
+    agent = ProjectAgent()
+    #agent.load()
+    # Train the agent
+    max_episode = 500  # You can adjust this value
+    episode_returns = agent.train(env,max_episode, 5000)
 
-# Save the trained model
-agent.save("model_final.pth")
-'''
+    # Save the trained model
+    agent.save("model_final.pth")
+
