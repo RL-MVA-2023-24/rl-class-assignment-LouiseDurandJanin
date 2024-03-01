@@ -46,11 +46,9 @@ class ProjectAgent:
         self.device = "cpu"
         self.env = env
         self.gamma = 0.95
-        #self.batch_size = 100
-        self.batch_size = 20
+        self.batch_size = 100
         self.nb_actions = 4
-        #self.memory = ReplayBuffer(100000, self.device)
-        self.memory = ReplayBuffer(1000000, self.device)
+        self.memory = ReplayBuffer(100000, self.device)
         self.epsilon_max = 1.
         self.epsilon_min = 0.01
         self.epsilon_stop = 1000
@@ -63,21 +61,20 @@ class ProjectAgent:
                           nn.Linear(self.nb_neurons, self.nb_neurons),
                           nn.ReLU(), 
                           nn.Linear(self.nb_neurons, self.nb_actions)).to(self.device)
-        #self.target_model = deepcopy(self.model).to(self.device)
+        self.target_model = deepcopy(self.model).to(self.device)
         self.criterion = torch.nn.MSELoss()
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
-        #self.nb_gradient_steps =  1
-        #self.update_target_strategy = 'replace'
-        #self.update_target_freq = 20
-        #self.update_target_tau = 0.005
+        self.nb_gradient_steps =  1
+        self.update_target_strategy = 'replace'
+        self.update_target_freq = 50
+        self.update_target_tau = 0.005
     
         self.path = "model_final.pth"
     
     def gradient_step(self):
         if len(self.memory) > self.batch_size:
             X, A, R, Y, D = self.memory.sample(self.batch_size)
-            QYmax = self.model(Y).max(1)[0].detach()
-            #update = torch.addcmul(R, self.gamma, 1-D, QYmax)
+            QYmax = self.target_model(Y).max(1)[0].detach()
             update = torch.addcmul(R, 1-D, QYmax, value=self.gamma)
             QXA = self.model(X).gather(1, A.to(torch.long).unsqueeze(1))
             loss = self.criterion(QXA, update.unsqueeze(1))
@@ -91,26 +88,34 @@ class ProjectAgent:
         state, _ = env.reset()
         epsilon = self.epsilon_max
         step = 0
-        best = 0
+        best=0
         while episode < max_episode:
             # update epsilon
             if step > self.epsilon_delay:
                 epsilon = max(self.epsilon_min, epsilon-self.epsilon_step)
-
             # select epsilon-greedy action
             if np.random.rand() < epsilon:
                 action = env.action_space.sample()
             else:
                 action = greedy_action(self.model, state)
-
             # step
             next_state, reward, done, trunc, _ = env.step(action)
             self.memory.append(state, action, reward, next_state, done)
             episode_cum_reward += reward
-
             # train
-            self.gradient_step()
-
+            for _ in range(self.nb_gradient_steps): 
+                self.gradient_step()
+            # update target network if needed
+            if self.update_target_strategy == 'replace':
+                if step % self.update_target_freq == 0: 
+                    self.target_model.load_state_dict(self.model.state_dict())
+            if self.update_target_strategy == 'ema':
+                target_state_dict = self.target_model.state_dict()
+                model_state_dict = self.model.state_dict()
+                tau = self.update_target_tau
+                for key in model_state_dict:
+                    target_state_dict[key] = tau*model_state_dict[key] + (1-tau)*target_state_dict[key]
+                self.target_model.load_state_dict(target_state_dict)
             # next transition
             step += 1
             if done or trunc:
@@ -119,21 +124,19 @@ class ProjectAgent:
                 score_pop = evaluate_HIV_population(self)
                 if current_score_agent > best:
                     best = current_score_agent
-                    print("Episode ", '{:3d}'.format(episode), 
+                    print("best score agent improved")
+                print("Episode ", '{:3d}'.format(episode), 
                       ", epsilon ", '{:6.2f}'.format(epsilon), 
                       ", batch size ", '{:5d}'.format(len(self.memory)), 
                       ", episode return ", '{:4.1f}'.format(episode_cum_reward),
-                       ", score agent ", '{:4.1f}'.format(current_score_agent),
+                     ", score agent ", '{:4.1f}'.format(current_score_agent),
                         ", score population ", '{:4.1f}'.format(score_pop),
                       sep='')
-                    self.save("model.pth")
-                    state, _ = env.reset()
-                    episode_return.append(episode_cum_reward)
-                    episode_cum_reward = 0
-
+                state, _ = env.reset()
+                episode_return.append(episode_cum_reward)
+                episode_cum_reward = 0
             else:
                 state = next_state
-
         return episode_return
 
     
@@ -160,7 +163,7 @@ class ProjectAgent:
 agent = ProjectAgent()
 agent.load()
 # Train the agent
-max_episode = 10  # You can adjust this value
+max_episode = 20  # You can adjust this value
 episode_returns = agent.train(env,max_episode)
 
 # Save the trained model
