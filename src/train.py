@@ -36,6 +36,31 @@ class ReplayBuffer:
         return list(map(lambda x:torch.Tensor(np.array(x)).to(self.device), list(zip(*batch))))
     def __len__(self):
         return len(self.data)
+
+class DQN_model(nn.Module):
+    def __init__(self, nb_neurons, state_dim, nb_actions):
+        super(DQN_model, self).__init__()
+        self.nb_neurons = nb_neurons 
+        self.state_dim = state_dim
+        self.relu = nn.ReLU()
+        self.nb_actions = nb_actions
+        self.linear1 = nn.Linear(self.state_dim, self.nb_neurons)
+        self.linear2 = nn.Linear(self.nb_neurons, self.nb_neurons)
+        self.linear3 = nn.Linear(self.nb_neurons, self.nb_neurons)
+        self.linear4 = nn.Linear(self.nb_neurons, self.nb_actions)
+    def forward(self, x):
+        x = self.linear1(x)
+        x = self.relu(x)
+        x = self.linear2(x)
+        x = self.relu(x)
+        x = self.linear3(x)
+        x = self.relu(x)
+        x = self.linear4(x)
+        return x
+
+
+
+
     
 class ProjectAgent:
     def __init__(self):
@@ -52,11 +77,7 @@ class ProjectAgent:
         self.epsilon_step = 0.005
         self.state_dim = self.env.observation_space.shape[0]
         self.nb_neurons=256
-        self.model = torch.nn.Sequential(nn.Linear(self.state_dim, self.nb_neurons),
-                          nn.ReLU(),
-                          nn.Linear(self.nb_neurons, self.nb_neurons),
-                          nn.ReLU(), 
-                          nn.Linear(self.nb_neurons, self.nb_actions)).to(self.device)
+        self.model = DQN_model(self.nb_neurons, self.state_dim, self.nb_actions)
         self.target_model = deepcopy(self.model).to(self.device)
         self.criterion = torch.nn.MSELoss()
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
@@ -65,7 +86,7 @@ class ProjectAgent:
         self.update_target_freq = 50
         self.update_target_tau = 0.005
     
-        self.path = "model_final2.pth"
+        self.path = "model3.pth"
     
     def gradient_step(self):
         if len(self.memory) > self.batch_size:
@@ -141,22 +162,13 @@ class ProjectAgent:
                 print("Episode", episode, "finished")
                 episode += 1
                 step=0
-                if episode % 100 ==0:
-                  current_score_agent = evaluate_HIV(self)
-                  score_pop = evaluate_HIV_population(self)
-                  if current_score_agent > best:
-                      best = current_score_agent
-                      print("best score agent improved")
-                      self.save("model.pth")
+                if episode % 20==0:
+                  self.save("model3.pth")
                   print("Episode ", '{:3d}'.format(episode), 
                         ", epsilon ", '{:6.2f}'.format(epsilon), 
                         ", length replay memory ", '{:5d}'.format(len(self.memory)), 
                         ", episode return ", '{:4.1f}'.format(episode_cum_reward),
-                      ", score agent ", '{:4.1f}'.format(current_score_agent),
-                          ", score population ", '{:4.1f}'.format(score_pop),
                         sep='')
-                elif episode % 20==0:
-                  self.save("model3.pth")
                   print("saved")
 
                
@@ -191,11 +203,11 @@ class ProjectAgent:
 
 if __name__ =="__main__":
     agent = ProjectAgent()
-    #agent.load()
+    agent.load()
     # Train the agent
     max_episode = 800  # You can adjust this value
-    episode_returns = agent.train(env,max_episode, 5000)
+    episode_returns = agent.train(env,max_episode, 8000)
 
     # Save the trained model
-    agent.save("model_final2.pth")
+    agent.save("model_final_5layers.pth")
 
