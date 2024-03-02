@@ -65,7 +65,7 @@ class ProjectAgent:
         self.update_target_freq = 50
         self.update_target_tau = 0.005
     
-        self.path = "model_final.pth"
+        self.path = "model_final2.pth"
     
     def gradient_step(self):
         if len(self.memory) > self.batch_size:
@@ -82,7 +82,7 @@ class ProjectAgent:
             Q = network(torch.Tensor(state).unsqueeze(0).to(self.device))
             return torch.argmax(Q).item()
         
-    def train(self, env, max_episode, np_samples):
+    def train(self, env, max_episode, nb_samples):
         episode_return = []
         episode = 0
         episode_cum_reward = 0
@@ -92,7 +92,8 @@ class ProjectAgent:
         best=0
 
         # Fill replay memory with random steps
-        for _ in range(np_samples):
+        
+        for _ in range(nb_samples):
             # select epsilon-greedy actio
             action = self.env.action_space.sample()
             next_state, reward, done, trunc, _ = self.env.step(action)
@@ -103,16 +104,17 @@ class ProjectAgent:
                 state = next_state
         print("Sampling done")
         
+        
         while episode < max_episode:
             # update epsilon
             
             if step > self.epsilon_delay:
-                epsilon = max(self.epsilon_min, epsilon-self.epsilon_step)
+              epsilon = max(self.epsilon_min, epsilon-self.epsilon_step)
             # select epsilon-greedy action
             if np.random.rand() < epsilon:
-                action = env.action_space.sample()
+              action = env.action_space.sample()
             else:
-                action = self.greedy_action(self.model, state)
+              action = self.greedy_action(self.model, state)
             # step
             next_state, reward, done, trunc, _ = env.step(action)
             #self.memory.append(state, action, reward, next_state, done)
@@ -133,28 +135,39 @@ class ProjectAgent:
                     target_state_dict[key] = tau*model_state_dict[key] + (1-tau)*target_state_dict[key]
                 self.target_model.load_state_dict(target_state_dict)
             # next transition
+            #print("step", step)
             step += 1
-            if done or trunc:
+            if done or trunc or step==200:
+                print("Episode", episode, "finished")
                 episode += 1
-                current_score_agent = evaluate_HIV(self)
-                score_pop = evaluate_HIV_population(self)
-                if current_score_agent > best:
-                    best = current_score_agent
-                    print("best score agent improved")
-                    self.save("model.pth")
-                print("Episode ", '{:3d}'.format(episode), 
-                      ", epsilon ", '{:6.2f}'.format(epsilon), 
-                      ", length replay memory ", '{:5d}'.format(len(self.memory)), 
-                      ", episode return ", '{:4.1f}'.format(episode_cum_reward),
-                     ", score agent ", '{:4.1f}'.format(current_score_agent),
-                        ", score population ", '{:4.1f}'.format(score_pop),
-                      sep='')
+                step=0
+                if episode % 100 ==0:
+                  current_score_agent = evaluate_HIV(self)
+                  score_pop = evaluate_HIV_population(self)
+                  if current_score_agent > best:
+                      best = current_score_agent
+                      print("best score agent improved")
+                      self.save("model.pth")
+                  print("Episode ", '{:3d}'.format(episode), 
+                        ", epsilon ", '{:6.2f}'.format(epsilon), 
+                        ", length replay memory ", '{:5d}'.format(len(self.memory)), 
+                        ", episode return ", '{:4.1f}'.format(episode_cum_reward),
+                      ", score agent ", '{:4.1f}'.format(current_score_agent),
+                          ", score population ", '{:4.1f}'.format(score_pop),
+                        sep='')
+                elif episode % 20==0:
+                  self.save("model3.pth")
+                  print("saved")
+
+               
                 state, _ = env.reset()
                 episode_return.append(episode_cum_reward)
                 episode_cum_reward = 0
             else:
                 state = next_state
         return episode_return
+
+    
 
     
     def act(self, observation, use_random=False):
@@ -180,9 +193,9 @@ if __name__ =="__main__":
     agent = ProjectAgent()
     #agent.load()
     # Train the agent
-    max_episode = 500  # You can adjust this value
+    max_episode = 800  # You can adjust this value
     episode_returns = agent.train(env,max_episode, 5000)
 
     # Save the trained model
-    agent.save("model_final.pth")
+    agent.save("model_final2.pth")
 
