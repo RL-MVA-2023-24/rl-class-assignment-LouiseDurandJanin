@@ -75,29 +75,29 @@ class ProjectAgent:
     def __init__(self):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.path = "model_MC.pth"
-        self.nb_actions = config['nb_actions']
-        self.gamma = config['gamma'] if 'gamma' in config.keys() else 0.95
-        self.batch_size = config['batch_size'] if 'batch_size' in config.keys() else 100
-        buffer_size = config['buffer_size'] if 'buffer_size' in config.keys() else int(1e5)
+        self.nb_actions = 4
+        self.gamma = 0.95
+        self.batch_size = 256
+        buffer_size = 1000000
         self.memory = ReplayBuffer(buffer_size,self.device)
-        self.epsilon_max = config['epsilon_max'] if 'epsilon_max' in config.keys() else 1.
-        self.epsilon_min = config['epsilon_min'] if 'epsilon_min' in config.keys() else 0.01
-        self.epsilon_stop = config['epsilon_decay_period'] if 'epsilon_decay_period' in config.keys() else 1000
-        self.epsilon_delay = config['epsilon_delay_decay'] if 'epsilon_delay_decay' in config.keys() else 20
+        self.epsilon_max =  1.
+        self.epsilon_min =  0.01
+        self.epsilon_stop =  1000
+        self.epsilon_delay = 20
         self.epsilon_step = (self.epsilon_max-self.epsilon_min)/self.epsilon_stop
         self.nb_neurons = 256
         self.env = env
         self.state_dim = self.env.observation_space.shape[0]
         self.model = DQN_model(self.nb_neurons, self.state_dim, self.nb_actions)
         self.target_model = deepcopy(self.model).to(self.device)
-        self.criterion = config['criterion'] if 'criterion' in config.keys() else torch.nn.MSELoss()
-        lr = config['learning_rate'] if 'learning_rate' in config.keys() else 0.001
-        self.optimizer = config['optimizer'] if 'optimizer' in config.keys() else torch.optim.Adam(self.model.parameters(), lr=lr)
-        self.nb_gradient_steps = config['gradient_steps'] if 'gradient_steps' in config.keys() else 1
-        self.update_target_strategy = config['update_target_strategy'] if 'update_target_strategy' in config.keys() else 'replace'
-        self.update_target_freq = config['update_target_freq'] if 'update_target_freq' in config.keys() else 20
-        self.update_target_tau = config['update_target_tau'] if 'update_target_tau' in config.keys() else 0.005
-        self.monitoring_nb_trials = config['monitoring_nb_trials'] if 'monitoring_nb_trials' in config.keys() else 0
+        self.criterion = torch.nn.SmoothL1Loss()
+        lr = 0.001
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        self.nb_gradient_steps = 3
+        self.update_target_strategy = 'replace'
+        self.update_target_freq = 50
+        self.update_target_tau = 0.005
+        self.monitoring_nb_trials = 50
 
     def MC_eval(self, env, nb_trials):   # NEW NEW NEW
         MC_total_reward = []
