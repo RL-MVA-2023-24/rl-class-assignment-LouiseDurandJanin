@@ -232,7 +232,7 @@ class ProjectAgent:
 
     def load(self):
         if self.path:
-            self.model.load_state_dict(torch.load(self.path))
+            self.model.load_state_dict(torch.load(self.path), map_location=torch.device('cpu'))
         else:
             print(f"File not found at path: {self.path}. Skipping loading.")
 
