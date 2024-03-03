@@ -74,6 +74,7 @@ class DQN_model(nn.Module):
 class ProjectAgent:
     def __init__(self):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.path = "best_model-4.pt"
         self.nb_actions = 4
         self.gamma = 0.95
         self.batch_size = 512
