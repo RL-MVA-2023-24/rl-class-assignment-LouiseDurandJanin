@@ -74,18 +74,17 @@ class DQN_model(nn.Module):
 class ProjectAgent:
     def __init__(self):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.path = "model_MC.pth"
         self.nb_actions = 4
         self.gamma = 0.95
-        self.batch_size = 256
-        buffer_size = 1000000
+        self.batch_size = 512
+        buffer_size = 100000
         self.memory = ReplayBuffer(buffer_size,self.device)
         self.epsilon_max =  1.
         self.epsilon_min =  0.01
-        self.epsilon_stop =  1000
-        self.epsilon_delay = 20
+        self.epsilon_stop =  20000
+        self.epsilon_delay = 100
         self.epsilon_step = (self.epsilon_max-self.epsilon_min)/self.epsilon_stop
-        self.nb_neurons = 256
+        self.nb_neurons = 512
         self.env = env
         self.state_dim = self.env.observation_space.shape[0]
         self.model = DQN_model(self.nb_neurons, self.state_dim, self.nb_actions)
@@ -93,7 +92,7 @@ class ProjectAgent:
         self.criterion = torch.nn.SmoothL1Loss()
         lr = 0.001
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
-        self.nb_gradient_steps = 3
+        self.nb_gradient_steps = 4
         self.update_target_strategy = 'replace'
         self.update_target_freq = 50
         self.update_target_tau = 0.005
@@ -246,13 +245,14 @@ if __name__ =="__main__":
           'epsilon_decay_period': 1000,
           'epsilon_delay_decay': 20,
           'batch_size': 256,
-          'gradient_steps': 3,
+          'gradient_steps': 2,
           'update_target_strategy': 'replace', # or 'ema'
           'update_target_freq': 50,
           'update_target_tau': 0.005,
           'criterion': torch.nn.SmoothL1Loss(),
           'monitoring_nb_trials': 50}
     agent = ProjectAgent()
+    agent.load()
     # Train the agent
     max_episode = 800  # You can adjust this value
     # Save the trained model
