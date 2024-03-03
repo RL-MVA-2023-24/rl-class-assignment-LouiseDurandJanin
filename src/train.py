@@ -9,7 +9,7 @@ import torch.nn as nn
 from sklearn.ensemble import RandomForestRegressor
 from copy import deepcopy
 from evaluate import evaluate_HIV, evaluate_HIV_population
-import matplotlib as plt 
+import matplotlib.pyplot as plt 
 
 env = TimeLimit(
     env=HIVPatient(domain_randomization=False), max_episode_steps=200
