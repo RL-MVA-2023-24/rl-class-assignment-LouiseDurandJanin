@@ -222,7 +222,7 @@ class ProjectAgent:
         if use_random:
             action = self.env.action_space.sample()
         else:
-            action = self.greedy_action(self.model, observation)
+            action = greedy_action(self.model, observation)
 
         return action
 
