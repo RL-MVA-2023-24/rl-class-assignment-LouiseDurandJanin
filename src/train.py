@@ -1,12 +1,9 @@
 from gymnasium.wrappers import TimeLimit
 from env_hiv import HIVPatient
 import numpy as np
-from tqdm import tqdm
-import joblib
 import torch
 import random
 import torch.nn as nn
-from sklearn.ensemble import RandomForestRegressor
 from copy import deepcopy
 from evaluate import evaluate_HIV, evaluate_HIV_population
 import matplotlib.pyplot as plt 
@@ -21,17 +18,20 @@ env = TimeLimit(
 # You have to implement your own agent.
 # Don't modify the methods names and signatures, but you can add methods.
 # ENJOY!
+
+# Greedy function
 def greedy_action(network, state):
     device = "cuda" if next(network.parameters()).is_cuda else "cpu"
     with torch.no_grad():
         Q = network(torch.Tensor(state).unsqueeze(0).to(device))
         return torch.argmax(Q).item()
-
+    
+# Instanciate the Replay Buffer
 class ReplayBuffer:
     def __init__(self, capacity, device):
-        self.capacity = capacity # capacity of the buffer
+        self.capacity = capacity 
         self.data = []
-        self.index = 0 # index of the next cell to be filled
+        self.index = 0 
         self.device = device
     def append(self, s, a, r, s_, d):
         if len(self.data) < self.capacity:
@@ -44,6 +44,7 @@ class ReplayBuffer:
     def __len__(self):
         return len(self.data)
 
+# Neural network for DQN model
 class DQN_model(nn.Module):
     def __init__(self, nb_neurons, state_dim, nb_actions):
         super(DQN_model, self).__init__()
@@ -51,58 +52,41 @@ class DQN_model(nn.Module):
         self.state_dim = state_dim
         self.relu = nn.ReLU()
         self.nb_actions = nb_actions
-        self.linear1 = nn.Linear(self.state_dim, self.nb_neurons)
-        self.linear2 = nn.Linear(self.nb_neurons, self.nb_neurons)
-        self.linear3 = nn.Linear(self.nb_neurons, self.nb_neurons)
-        self.linear4 = nn.Linear(self.nb_neurons, self.nb_neurons)
-        self.linear5 = nn.Linear(self.nb_neurons, self.nb_neurons)
-        self.linear6 = nn.Linear(self.nb_neurons, self.nb_actions)
+        self.model = nn.Sequential(
+            nn.Linear(self.state_dim, self.nb_neurons),
+            nn.ReLU(),
+            nn.Linear(self.nb_neurons, self.nb_neurons),
+            nn.ReLU(), 
+            nn.Linear(self.nb_neurons, self.nb_neurons),
+            nn.ReLU(), 
+            nn.Linear(self.nb_neurons, self.nb_neurons),
+            nn.ReLU(), 
+            nn.Linear(self.nb_neurons, self.nb_neurons),
+            nn.ReLU(), 
+            nn.Linear(self.nb_neurons, self.nb_actions)
+        )
+
     def forward(self, x):
-        x = self.linear1(x)
-        x = self.relu(x)
-        x = self.linear2(x)
-        x = self.relu(x)
-        x = self.linear3(x)
-        x = self.relu(x)
-        x = self.linear4(x)
-        x = self.relu(x)
-        x = self.linear5(x)
-        x = self.relu(x)
-        x = self.linear6(x)
-        return x
-
-
-
+        return self.model(x)
 
     
 class ProjectAgent:
     def __init__(self):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.path = "model-9.pt"
+        self.path = "model_last_DDQN.pt"
         self.nb_actions = 4
-        self.gamma = 0.95
+        self.gamma = 0.98
         self.batch_size = 800
         buffer_size = 100000
         self.memory = ReplayBuffer(buffer_size,self.device)
-        self.epsilon_max =  1.
+        self.epsilon_max =  1.0
         self.epsilon_min =  0.05
         self.epsilon_stop =  20000
         self.epsilon_delay = 100
         self.epsilon_step = (self.epsilon_max-self.epsilon_min)/self.epsilon_stop
         self.nb_neurons = 512
         self.state_dim = env.observation_space.shape[0]
-        self.model = torch.nn.Sequential(nn.Linear(self.state_dim, self.nb_neurons),
-                          nn.ReLU(),
-                          nn.Linear(self.nb_neurons, self.nb_neurons),
-                          nn.ReLU(), 
-                          nn.Linear(self.nb_neurons, self.nb_neurons),
-                          nn.ReLU(), 
-                          nn.Linear(self.nb_neurons, self.nb_neurons),
-                          nn.ReLU(), 
-                          nn.Linear(self.nb_neurons, self.nb_neurons),
-                          nn.ReLU(), 
-                          nn.Linear(self.nb_neurons, self.nb_actions)).to(self.device)
-
+        self.model = DQN_model(self.nb_neurons, self.state_dim, self.nb_actions).to(self.device)
         self.target_model = deepcopy(self.model).to(self.device)
         self.criterion = torch.nn.SmoothL1Loss()
         lr = 0.001
@@ -113,46 +97,21 @@ class ProjectAgent:
         self.update_target_tau = 0.005
         self.monitoring_nb_trials = 50
 
-    def MC_eval(self, env, nb_trials):   # NEW NEW NEW
-        MC_total_reward = []
-        MC_discounted_reward = []
-        for _ in range(nb_trials):
-            x,_ = env.reset()
-            done = False
-            trunc = False
-            total_reward = 0
-            discounted_reward = 0
-            step = 0
-            best=0
-            while not (done or trunc):
-                a = greedy_action(self.model, x)
-                y,r,done,trunc,_ = env.step(a)
-                x = y
-                total_reward += r
-                discounted_reward += self.gamma**step * r
-                step += 1
-            MC_total_reward.append(total_reward)
-            MC_discounted_reward.append(discounted_reward)
-        return np.mean(MC_discounted_reward), np.mean(MC_total_reward)
-    
-    def V_initial_state(self, env, nb_trials):   # NEW NEW NEW
-        with torch.no_grad():
-            for _ in range(nb_trials):
-                val = []
-                x,_ = env.reset()
-                val.append(self.model(torch.Tensor(x).unsqueeze(0).to(self.device)).max().item())
-        return np.mean(val)
+
     
     def gradient_step(self):
         if len(self.memory) > self.batch_size:
             X, A, R, Y, D = self.memory.sample(self.batch_size)
-            #QYmax = self.target_model(Y).max(1)[0].detach()
-            #update = torch.addcmul(R, 1-D, QYmax, value=self.gamma)
-            #QXA = self.model(X).gather(1, A.to(torch.long).unsqueeze(1))
-            #loss = self.criterion(QXA, update.unsqueeze(1))
-            #self.optimizer.zero_grad()
-            #loss.backward()
-            #self.optimizer.step() 
+            '''
+            QYmax = self.target_model(Y).max(1)[0].detach()
+            update = torch.addcmul(R, 1-D, QYmax, value=self.gamma)
+            QXA = self.model(X).gather(1, A.to(torch.long).unsqueeze(1))
+            loss = self.criterion(QXA, update.unsqueeze(1))
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step() 
+            '''
+            # Try DDQN loss
             q_online = self.model(Y)
             action_q_online = torch.argmax(q_online, dim=1)
             q_target = self.target_model(Y)
@@ -165,12 +124,10 @@ class ProjectAgent:
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step() 
+            
     
     def train(self, env, max_episode):
         episode_return = []
-        MC_avg_total_reward = []   # NEW NEW NEW
-        MC_avg_discounted_reward = []   # NEW NEW NEW
-        V_init_state = []   # NEW NEW NEW
         episode = 0
         episode_cum_reward = 0
         state, _ = env.reset()
@@ -208,44 +165,26 @@ class ProjectAgent:
             step += 1
             if done or trunc:
                 episode += 1
-                # Monitoring
                 self.save(self.path)
                 print("model saved")
                 score = evaluate_HIV(agent=self, nb_episode=1)
-                if self.monitoring_nb_trials>0:
-                    if score > best:
-                        best = score
-                        self.save("best_model.pt")
-                        print(" New model saved")
-                    #MC_dr, MC_tr = self.MC_eval(env, self.monitoring_nb_trials)    # NEW NEW NEW
-                    #V0 = self.V_initial_state(env, self.monitoring_nb_trials)   # NEW NEW NEW
-                    #MC_avg_total_reward.append(MC_tr)   # NEW NEW NEW
-                    #MC_avg_discounted_reward.append(MC_dr)   # NEW NEW NEW
-                    #V_init_state.append(V0)   # NEW NEW NEW
-                    episode_return.append(episode_cum_reward)   # NEW NEW NEW
-                    print("Episode ", '{:2d}'.format(episode), 
-                          ", epsilon ", '{:6.2f}'.format(epsilon), 
-                          ", batch size ", '{:4d}'.format(len(self.memory)), 
-                          ", ep return ", '{:4.1f}'.format(episode_cum_reward),
-                           ", score ", '{:6.2f}'.format(score),
-                          #", MC tot ", '{:6.2f}'.format(MC_tr),
-                         # ", MC disc ", '{:6.2f}'.format(MC_dr),
-                         # ", V0 ", '{:6.2f}'.format(V0),
-                          sep='')
-                else:
-                    episode_return.append(episode_cum_reward)
-                    print("Episode ", '{:2d}'.format(episode), 
-                          ", epsilon ", '{:6.2f}'.format(epsilon), 
-                          ", batch size ", '{:4d}'.format(len(self.memory)), 
-                          ", ep return ", '{:4.1f}'.format(episode_cum_reward), 
-                          sep='')
-
+                if score > best:
+                    best = score
+                    self.save("best_model.pt")
+                    print("New model saved")
+                episode_return.append(episode_cum_reward)   
+                print("Episode ", '{:2d}'.format(episode), 
+                        ", epsilon ", '{:6.2f}'.format(epsilon), 
+                        ", batch size ", '{:4d}'.format(len(self.memory)), 
+                        ", ep return ", '{:4.1f}'.format(episode_cum_reward),
+                        ", score ", '{:6.2f}'.format(score),
+                        sep='')
                 
                 state, _ = env.reset()
                 episode_cum_reward = 0
             else:
                 state = next_state
-        return episode_return, MC_avg_discounted_reward, MC_avg_total_reward, V_init_state
+        return episode_return
 
     
 
@@ -265,7 +204,10 @@ class ProjectAgent:
 
     def load(self):
         if self.path:
-            self.model.load_state_dict(torch.load(self.path, map_location=torch.device('cpu')))
+            state_dict = torch.load(self.path, map_location=self.device)
+            state_dict = {"model." + key: value for key, value in state_dict.items()}
+            self.model.load_state_dict(state_dict)
+            #self.model.load_state_dict(torch.load(self.path, map_location=torch.device('cpu')))
         else:
             print(f"File not found at path: {self.path}. Skipping loading.")
 
@@ -288,18 +230,9 @@ if __name__ =="__main__":
     agent = ProjectAgent()
     agent.load()
     # Train the agent
-    max_episode = 800  # You can adjust this value
-    # Save the trained model
+    max_episode = 200  
+    list_ep_return = agent.train(env,max_episode)
 
 
-    ep_length, disc_rewards, tot_rewards, V0 = agent.train(env, 800)
-    '''
-    plt.plot(ep_length, label="training episode length")
-    plt.plot(tot_rewards, label="MC eval of total reward")
-    plt.legend()
-    plt.figure()
-    plt.plot(disc_rewards, label="MC eval of discounted reward")
-    plt.plot(V0, label="average $max_a Q(s_0)$")
-    plt.legend();
-    '''
+ 
 
