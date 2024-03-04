@@ -55,7 +55,8 @@ class DQN_model(nn.Module):
         self.linear2 = nn.Linear(self.nb_neurons, self.nb_neurons)
         self.linear3 = nn.Linear(self.nb_neurons, self.nb_neurons)
         self.linear4 = nn.Linear(self.nb_neurons, self.nb_neurons)
-        self.linear5 = nn.Linear(self.nb_neurons, self.nb_actions)
+        self.linear5 = nn.Linear(self.nb_neurons, self.nb_neurons)
+        self.linear6 = nn.Linear(self.nb_neurons, self.nb_actions)
     def forward(self, x):
         x = self.linear1(x)
         x = self.relu(x)
@@ -66,6 +67,8 @@ class DQN_model(nn.Module):
         x = self.linear4(x)
         x = self.relu(x)
         x = self.linear5(x)
+        x = self.relu(x)
+        x = self.linear6(x)
         return x
 
 
@@ -75,7 +78,7 @@ class DQN_model(nn.Module):
 class ProjectAgent:
     def __init__(self):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.path = "best_model-5.pt"
+        self.path = "model-9.pt"
         self.nb_actions = 4
         self.gamma = 0.95
         self.batch_size = 800
@@ -88,7 +91,18 @@ class ProjectAgent:
         self.epsilon_step = (self.epsilon_max-self.epsilon_min)/self.epsilon_stop
         self.nb_neurons = 512
         self.state_dim = env.observation_space.shape[0]
-        self.model = DQN_model(self.nb_neurons, self.state_dim, self.nb_actions)
+        self.model = torch.nn.Sequential(nn.Linear(self.state_dim, self.nb_neurons),
+                          nn.ReLU(),
+                          nn.Linear(self.nb_neurons, self.nb_neurons),
+                          nn.ReLU(), 
+                          nn.Linear(self.nb_neurons, self.nb_neurons),
+                          nn.ReLU(), 
+                          nn.Linear(self.nb_neurons, self.nb_neurons),
+                          nn.ReLU(), 
+                          nn.Linear(self.nb_neurons, self.nb_neurons),
+                          nn.ReLU(), 
+                          nn.Linear(self.nb_neurons, self.nb_actions)).to(self.device)
+
         self.target_model = deepcopy(self.model).to(self.device)
         self.criterion = torch.nn.SmoothL1Loss()
         lr = 0.001
