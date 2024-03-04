@@ -10,6 +10,7 @@ from sklearn.ensemble import RandomForestRegressor
 from copy import deepcopy
 from evaluate import evaluate_HIV, evaluate_HIV_population
 import matplotlib.pyplot as plt 
+import torch.nn.functional as F
 
 env = TimeLimit(
     env=HIVPatient(domain_randomization=False), max_episode_steps=200
@@ -74,26 +75,25 @@ class DQN_model(nn.Module):
 class ProjectAgent:
     def __init__(self):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.path = "best_model-4.pt"
+        self.path = "best_model-5.pt"
         self.nb_actions = 4
         self.gamma = 0.95
-        self.batch_size = 512
+        self.batch_size = 800
         buffer_size = 100000
         self.memory = ReplayBuffer(buffer_size,self.device)
         self.epsilon_max =  1.
-        self.epsilon_min =  0.01
+        self.epsilon_min =  0.05
         self.epsilon_stop =  20000
         self.epsilon_delay = 100
         self.epsilon_step = (self.epsilon_max-self.epsilon_min)/self.epsilon_stop
         self.nb_neurons = 512
-        self.env = env
-        self.state_dim = self.env.observation_space.shape[0]
+        self.state_dim = env.observation_space.shape[0]
         self.model = DQN_model(self.nb_neurons, self.state_dim, self.nb_actions)
         self.target_model = deepcopy(self.model).to(self.device)
         self.criterion = torch.nn.SmoothL1Loss()
         lr = 0.001
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
-        self.nb_gradient_steps = 4
+        self.nb_gradient_steps = 8
         self.update_target_strategy = 'replace'
         self.update_target_freq = 50
         self.update_target_tau = 0.005
@@ -109,6 +109,7 @@ class ProjectAgent:
             total_reward = 0
             discounted_reward = 0
             step = 0
+            best=0
             while not (done or trunc):
                 a = greedy_action(self.model, x)
                 y,r,done,trunc,_ = env.step(a)
@@ -131,10 +132,22 @@ class ProjectAgent:
     def gradient_step(self):
         if len(self.memory) > self.batch_size:
             X, A, R, Y, D = self.memory.sample(self.batch_size)
-            QYmax = self.target_model(Y).max(1)[0].detach()
-            update = torch.addcmul(R, 1-D, QYmax, value=self.gamma)
-            QXA = self.model(X).gather(1, A.to(torch.long).unsqueeze(1))
-            loss = self.criterion(QXA, update.unsqueeze(1))
+            #QYmax = self.target_model(Y).max(1)[0].detach()
+            #update = torch.addcmul(R, 1-D, QYmax, value=self.gamma)
+            #QXA = self.model(X).gather(1, A.to(torch.long).unsqueeze(1))
+            #loss = self.criterion(QXA, update.unsqueeze(1))
+            #self.optimizer.zero_grad()
+            #loss.backward()
+            #self.optimizer.step() 
+            q_online = self.model(Y)
+            action_q_online = torch.argmax(q_online, dim=1)
+            q_target = self.target_model(Y)
+            ddqn_q = torch.sum(q_target * F.one_hot(action_q_online, 4), dim=1)
+            expected_q = R + self.gamma * ddqn_q * (1.0 - D)
+
+            main_q = torch.sum(self.model(X) * F.one_hot(A.long(), num_classes = 4), dim=1)
+
+            loss = self.criterion(expected_q.detach(), main_q)
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step() 
@@ -149,6 +162,7 @@ class ProjectAgent:
         state, _ = env.reset()
         epsilon = self.epsilon_max
         step = 0
+        best=0
         while episode < max_episode:
             # update epsilon
             if step > self.epsilon_delay:
@@ -178,26 +192,31 @@ class ProjectAgent:
                 self.target_model.load_state_dict(target_state_dict)
             # next transition
             step += 1
-            if done or trunc or step==200:
-                step=0
+            if done or trunc:
                 episode += 1
                 # Monitoring
                 self.save(self.path)
                 print("model saved")
+                score = evaluate_HIV(agent=self, nb_episode=1)
                 if self.monitoring_nb_trials>0:
-                    MC_dr, MC_tr = self.MC_eval(env, self.monitoring_nb_trials)    # NEW NEW NEW
-                    V0 = self.V_initial_state(env, self.monitoring_nb_trials)   # NEW NEW NEW
-                    MC_avg_total_reward.append(MC_tr)   # NEW NEW NEW
-                    MC_avg_discounted_reward.append(MC_dr)   # NEW NEW NEW
-                    V_init_state.append(V0)   # NEW NEW NEW
+                    if score > best:
+                        best = score
+                        self.save("best_model.pt")
+                        print(" New model saved")
+                    #MC_dr, MC_tr = self.MC_eval(env, self.monitoring_nb_trials)    # NEW NEW NEW
+                    #V0 = self.V_initial_state(env, self.monitoring_nb_trials)   # NEW NEW NEW
+                    #MC_avg_total_reward.append(MC_tr)   # NEW NEW NEW
+                    #MC_avg_discounted_reward.append(MC_dr)   # NEW NEW NEW
+                    #V_init_state.append(V0)   # NEW NEW NEW
                     episode_return.append(episode_cum_reward)   # NEW NEW NEW
                     print("Episode ", '{:2d}'.format(episode), 
                           ", epsilon ", '{:6.2f}'.format(epsilon), 
                           ", batch size ", '{:4d}'.format(len(self.memory)), 
-                          ", ep return ", '{:4.1f}'.format(episode_cum_reward), 
-                          ", MC tot ", '{:6.2f}'.format(MC_tr),
-                          ", MC disc ", '{:6.2f}'.format(MC_dr),
-                          ", V0 ", '{:6.2f}'.format(V0),
+                          ", ep return ", '{:4.1f}'.format(episode_cum_reward),
+                           ", score ", '{:6.2f}'.format(score),
+                          #", MC tot ", '{:6.2f}'.format(MC_tr),
+                         # ", MC disc ", '{:6.2f}'.format(MC_dr),
+                         # ", V0 ", '{:6.2f}'.format(V0),
                           sep='')
                 else:
                     episode_return.append(episode_cum_reward)
@@ -232,7 +251,7 @@ class ProjectAgent:
 
     def load(self):
         if self.path:
-            self.model.load_state_dict(torch.load(self.path), map_location=torch.device('cpu'))
+            self.model.load_state_dict(torch.load(self.path, map_location=torch.device('cpu')))
         else:
             print(f"File not found at path: {self.path}. Skipping loading.")
 
@@ -260,6 +279,7 @@ if __name__ =="__main__":
 
 
     ep_length, disc_rewards, tot_rewards, V0 = agent.train(env, 800)
+    '''
     plt.plot(ep_length, label="training episode length")
     plt.plot(tot_rewards, label="MC eval of total reward")
     plt.legend()
@@ -267,4 +287,5 @@ if __name__ =="__main__":
     plt.plot(disc_rewards, label="MC eval of discounted reward")
     plt.plot(V0, label="average $max_a Q(s_0)$")
     plt.legend();
+    '''
 
